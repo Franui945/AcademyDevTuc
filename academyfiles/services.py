@@ -3,6 +3,8 @@ import sqlite3
 import hashlib
 import os
 from typing import Optional, Any, Dict, Tuple, List
+import datetime
+from datetime import date
 
 from database import get_connection
 from models import (
@@ -312,39 +314,156 @@ def listar_pagos_por_alumno(id_alumno: int):
         conn.close()
 
 
-# ======================================================
-# EXÁMENES Y NOTAS
-# ======================================================
+# =========================
+# EXÁMENES
+# =========================
 
-def crear_examen(ex: Examen):
+def crear_examen_service(ex: Examen) -> Tuple[bool, Optional[str]]:
+    nombre = (ex.nombre or "").strip()
+    tipo = (ex.tipo or "").strip().upper()
+    fecha = (ex.fecha_examen or "").strip()
+
+    if not ex.id_curso:
+        return False, "Curso inválido."
+    if not nombre:
+        return False, "El nombre del examen es obligatorio."
+    if not fecha:
+        return False, "La fecha del examen es obligatoria."
+    try:
+        date.fromisoformat(fecha)
+    except Exception:
+        return False, "Fecha inválida. Usá YYYY-MM-DD."
+
     conn = get_connection()
     try:
         with conn:
-            insert(conn, "examen", ex.to_dict())
+            conn.execute(
+                """
+                INSERT INTO examen (id_curso, nombre, tipo, fecha_examen)
+                VALUES (?, ?, ?, ?)
+                """,
+                (int(ex.id_curso), nombre, tipo, fecha)
+            )
+        return True, None
+    except Exception as e:
+        return False, str(e)
     finally:
         conn.close()
 
 
-def registrar_nota(nota: Nota):
-    conn = get_connection()
-    try:
-        with conn:
-            insert(conn, "nota", nota.to_dict())
-    finally:
-        conn.close()
-
-
-def obtener_notas_por_alumno(id_alumno: int) -> List[Dict]:
+def listar_examenes_por_curso(id_curso: int) -> List[Dict]:
     conn = get_connection()
     conn.row_factory = sqlite3.Row
     try:
-        cur = conn.execute("""
-            SELECT n.*, e.nombre AS examen, c.nombre AS curso
+        cur = conn.execute(
+            """
+            SELECT id, id_curso, nombre, tipo, fecha_examen
+            FROM examen
+            WHERE id_curso = ?
+            ORDER BY fecha_examen DESC, nombre;
+            """,
+            (int(id_curso),)
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+# Para Docente: ver inscriptos (para cargar notas)
+def listar_inscriptos_por_curso(id_curso: int) -> List[Dict]:
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(
+            """
+            SELECT
+                u.id AS id_alumno,
+                u.nombre || ' ' || u.apellido AS alumno,
+                i.estado AS estado_insc,
+                i.id AS id_inscripcion
+            FROM inscripcion i
+            JOIN usuario u ON u.id = i.id_alumno
+            WHERE i.id_curso = ?
+              AND i.estado IN ('PENDIENTE','CONFIRMADA')
+            ORDER BY u.apellido, u.nombre;
+            """,
+            (int(id_curso),)
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+# =========================
+# NOTAS
+# =========================
+
+def guardar_nota_service(n: Nota) -> Tuple[bool, Optional[str]]:
+    if not n.id_examen or not n.id_alumno:
+        return False, "Examen o alumno inválido."
+
+    try:
+        nota_val = float(n.nota)
+    except Exception:
+        return False, "Nota inválida."
+
+    if nota_val < 0 or nota_val > 10:
+        return False, "La nota debe estar entre 0 y 10."
+
+    fecha = (n.fecha_registro or "").strip() or str(date.today())
+    try:
+        date.fromisoformat(fecha)
+    except Exception:
+        return False, "Fecha inválida. Usá YYYY-MM-DD."
+
+    obs = (n.observacion or "").strip() or None
+
+    conn = get_connection()
+    try:
+        with conn:
+            # UPSERT: si ya existe (id_examen,id_alumno), actualiza
+            conn.execute(
+                """
+                INSERT INTO nota (id_examen, id_alumno, nota, fecha_registro, observacion)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(id_examen, id_alumno)
+                DO UPDATE SET
+                    nota = excluded.nota,
+                    fecha_registro = excluded.fecha_registro,
+                    observacion = excluded.observacion
+                """,
+                (int(n.id_examen), int(n.id_alumno), float(nota_val), fecha, obs)
+            )
+        return True, None
+    except Exception as e:
+        return False, str(e)
+    finally:
+        conn.close()
+
+
+def listar_notas_por_alumno(id_alumno: int) -> List[Dict]:
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(
+            """
+            SELECT
+                n.id,
+                c.nombre AS curso,
+                e.nombre AS examen,
+                e.tipo,
+                e.fecha_examen,
+                n.nota,
+                n.fecha_registro,
+                n.observacion
             FROM nota n
             JOIN examen e ON e.id = n.id_examen
             JOIN curso c ON c.id = e.id_curso
             WHERE n.id_alumno = ?
-        """, (id_alumno,))
+            ORDER BY e.fecha_examen DESC, c.nombre, e.nombre;
+            """,
+            (int(id_alumno),)
+        )
         return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()

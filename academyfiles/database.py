@@ -135,21 +135,27 @@ def create_tables():
 
 
     CREATE TABLE IF NOT EXISTS examen (
-      id_inscripcion INTEGER PRIMARY KEY,
-      nombre TEXT NOT NULL,
-      tipo TEXT NOT NULL,
-      fecha_examen TEXT NOT NULL,
-      FOREIGN KEY (id_inscripcion) REFERENCES inscripcion(id)
-        ON UPDATE CASCADE ON DELETE RESTRICT
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_curso INTEGER NOT NULL,
+    nombre TEXT NOT NULL,
+    tipo TEXT NOT NULL,              -- "PARCIAL", "FINAL", etc
+    fecha_examen TEXT NOT NULL,      -- "YYYY-MM-DD"
+    FOREIGN KEY (id_curso) REFERENCES curso(id)
+        ON UPDATE CASCADE ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS nota (
-      id_examen INTEGER PRIMARY KEY,
-      nota REAL NOT NULL,
-      fecha_registro TEXT NOT NULL,
-      observacion TEXT,
-      FOREIGN KEY (id_examen) REFERENCES examen(id_inscripcion)
-        ON UPDATE CASCADE ON DELETE RESTRICT
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_examen INTEGER NOT NULL,
+    id_alumno INTEGER NOT NULL,
+    nota REAL NOT NULL,
+    fecha_registro TEXT NOT NULL,    -- "YYYY-MM-DD"
+    observacion TEXT,
+    UNIQUE (id_examen, id_alumno),
+    FOREIGN KEY (id_examen) REFERENCES examen(id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    FOREIGN KEY (id_alumno) REFERENCES usuario(id)
+        ON UPDATE CASCADE ON DELETE CASCADE
     );
     """
 

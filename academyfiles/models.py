@@ -119,18 +119,24 @@ class Pago:
 
 @dataclass
 class Examen:
-    id_inscripcion: int
-    nombre: str
-    tipo: str
-    fecha_examen: str         # 'YYYY-MM-DD'
+    id: Optional[int] = None
+    id_curso: int = 0
+    nombre: str = ""
+    tipo: str = "PARCIAL"
+    fecha_examen: str = ""  # 'YYYY-MM-DD'
+
     def to_dict(self) -> Dict[str, Any]:
         return _clean(asdict(self))
 
+
 @dataclass
 class Nota:
-    id_examen: int
-    nota: float
-    fecha_registro: str       # 'YYYY-MM-DD'
+    id: Optional[int] = None
+    id_examen: int = 0
+    id_alumno: int = 0
+    nota: float = 0.0
+    fecha_registro: str = ""  # 'YYYY-MM-DD'
     observacion: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         return _clean(asdict(self))
