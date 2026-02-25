@@ -52,6 +52,9 @@ from services import (
     crear_examen_service,
     listar_notas_por_alumno,
     listar_inscriptos_por_curso,
+    guardar_nota_service,
+    listar_examenes_por_curso
+
 )
 
 
@@ -3299,6 +3302,8 @@ class AppAcademia:
         ttk.Button(btns, text="Guardar", style="Accent.TButton", command=guardar).pack(side="left", padx=5)
         ttk.Button(btns, text="Volver", style="Secondary.TButton", command=self._mostrar_home).pack(side="left", padx=5)
 
+    
+
     def _mis_notas_alumno(self):
         if not self.usuario_actual or self.usuario_actual.get("rol") != "ALUMNO":
             messagebox.showwarning("Permiso denegado", "Solo ALUMNO.")
@@ -3352,6 +3357,164 @@ class AppAcademia:
         ttk.Button(btns, text="Recargar", style="Secondary.TButton", command=cargar).pack(side="left", padx=5)
 
         cargar()
+
+    def _cargar_notas_docente(self):
+        if not self._es_docente():
+            messagebox.showwarning("Permiso denegado", "Solo DOCENTE.")
+            return
+
+        self._limpiar_contenedor()
+        ttk.Label(self.contenedor, text="Cargar notas", style="Title.TLabel").pack(pady=(10, 15))
+
+        # cursos del docente
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.execute(
+                "SELECT id, nombre FROM curso WHERE id_docente = ? ORDER BY nombre;",
+                (int(self.usuario_actual["id"]),)
+            )
+            cursos = [dict(r) for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+        if not cursos:
+            messagebox.showinfo("Info", "No tenés cursos asignados.")
+            return
+
+        map_curso = {c["nombre"]: c["id"] for c in cursos}
+
+        top = ttk.Frame(self.contenedor, style="Card.TFrame", padding=12)
+        top.pack(fill="x")
+
+        ttk.Label(top, text="Curso:", style="FormLabel.TLabel").grid(row=0, column=0, sticky="e", padx=5, pady=4)
+        cb_curso = ttk.Combobox(top, state="readonly", values=list(map_curso.keys()), width=40)
+        cb_curso.grid(row=0, column=1, sticky="w", padx=5, pady=4)
+        cb_curso.set(list(map_curso.keys())[0])
+
+        ttk.Label(top, text="Examen:", style="FormLabel.TLabel").grid(row=1, column=0, sticky="e", padx=5, pady=4)
+        cb_examen = ttk.Combobox(top, state="readonly", values=[], width=40)
+        cb_examen.grid(row=1, column=1, sticky="w", padx=5, pady=4)
+
+        # tabla alumnos
+        frame_tabla = ttk.Frame(self.contenedor, style="Card.TFrame", padding=10)
+        frame_tabla.pack(fill="both", expand=True, pady=(10, 0))
+
+        columnas = ("ID Alumno", "Alumno", "Estado", "Nota", "Obs")
+        tree = ttk.Treeview(frame_tabla, columns=columnas, show="headings", height=10)
+        for c in columnas:
+            tree.heading(c, text=c)
+        tree.column("ID Alumno", width=80, anchor="center")
+        tree.column("Alumno", width=220)
+        tree.column("Estado", width=110, anchor="center")
+        tree.column("Nota", width=80, anchor="center")
+        tree.column("Obs", width=220)
+        tree.pack(side="left", fill="both", expand=True)
+
+        sy = ttk.Scrollbar(frame_tabla, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=sy.set)
+        sy.pack(side="right", fill="y")
+
+        # mapeo examen visible -> id
+        map_examen = {}
+
+        def recargar_examenes_y_alumnos():
+            nonlocal map_examen
+            map_examen = {}
+
+            id_curso = int(map_curso[cb_curso.get()])
+
+            # cargar exámenes
+            exs = listar_examenes_por_curso(id_curso)
+            visibles = []
+            for e in exs:
+                txt = f'{e["fecha_examen"]} - {e["tipo"]} - {e["nombre"]}'
+                visibles.append(txt)
+                map_examen[txt] = e["id"]
+
+            cb_examen["values"] = visibles
+            if visibles:
+                cb_examen.set(visibles[0])
+            else:
+                cb_examen.set("")
+
+            # cargar alumnos inscriptos
+            for it in tree.get_children():
+                tree.delete(it)
+
+            alumnos = listar_inscriptos_por_curso(id_curso)
+            for a in alumnos:
+                tree.insert("", "end", values=(a["id_alumno"], a["alumno"], a["estado_insc"], "", ""))
+
+        cb_curso.bind("<<ComboboxSelected>>", lambda e: recargar_examenes_y_alumnos())
+        recargar_examenes_y_alumnos()
+
+        def guardar_nota_seleccion():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showwarning("Atención", "Seleccioná un alumno en la tabla.")
+                return
+            if not cb_examen.get():
+                messagebox.showwarning("Atención", "No hay examen seleccionado.")
+                return
+
+            values = tree.item(sel[0], "values")
+            id_alumno = int(values[0])
+
+            # pedimos nota y obs
+            win = tk.Toplevel(self.root)
+            win.title("Guardar nota")
+            win.transient(self.root)
+            win.grab_set()
+
+            frm = ttk.Frame(win, padding=12)
+            frm.grid(row=0, column=0, sticky="nsew")
+
+            ttk.Label(frm, text="Nota (0-10):").grid(row=0, column=0, sticky="w")
+            var_nota = tk.StringVar()
+            ent_nota = ttk.Entry(frm, textvariable=var_nota, width=10)
+            ent_nota.grid(row=0, column=1, sticky="w", padx=(8, 0))
+
+            ttk.Label(frm, text="Observación:").grid(row=1, column=0, sticky="w", pady=(8, 0))
+            var_obs = tk.StringVar()
+            ent_obs = ttk.Entry(frm, textvariable=var_obs, width=35)
+            ent_obs.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
+
+            def ok():
+                try:
+                    nota_val = float(var_nota.get().replace(",", "."))
+                except Exception:
+                    messagebox.showwarning("Atención", "Nota inválida.")
+                    return
+
+                id_examen = int(map_examen[cb_examen.get()])
+                n = Nota(
+                    id=None,
+                    id_examen=id_examen,
+                    id_alumno=id_alumno,
+                    nota=nota_val,
+                    fecha_registro=str(date.today()),
+                    observacion=var_obs.get().strip() or None
+                )
+                ok_, err = guardar_nota_service(n)
+                if not ok_:
+                    messagebox.showerror("Error", err or "No se pudo guardar la nota.")
+                    return
+
+                # reflejar en la fila
+                tree.item(sel[0], values=(values[0], values[1], values[2], nota_val, var_obs.get().strip()))
+                messagebox.showinfo("Éxito", "Nota guardada.")
+                win.destroy()
+
+            btns = ttk.Frame(frm)
+            btns.grid(row=2, column=0, columnspan=2, sticky="e", pady=(12, 0))
+            ttk.Button(btns, text="Cancelar", command=win.destroy).grid(row=0, column=0, padx=(0, 8))
+            ttk.Button(btns, text="Guardar", style="Accent.TButton", command=ok).grid(row=0, column=1)
+
+        botones = ttk.Frame(self.contenedor, style="Card.TFrame", padding=10)
+        botones.pack(fill="x", pady=(10, 0))
+        ttk.Button(botones, text="Guardar nota", style="Accent.TButton", command=guardar_nota_seleccion).pack(side="left", padx=5)
+        ttk.Button(botones, text="Recargar", style="Secondary.TButton", command=recargar_examenes_y_alumnos).pack(side="left", padx=5)
 
 
 
