@@ -318,6 +318,17 @@ def listar_pagos_por_alumno(id_alumno: int):
 # EXÁMENES
 # =========================
 
+def crear_examen(ex: Examen) -> int:
+    conn = get_connection()
+    try:
+        with conn:
+            data = ex.to_dict()
+            data.pop("id", None)  # por si viene
+            return insert_and_get_id(conn, "examen", data)
+    finally:
+        conn.close()
+
+
 def crear_examen_service(ex: Examen) -> Tuple[bool, Optional[str]]:
     nombre = (ex.nombre or "").strip()
     tipo = (ex.tipo or "").strip().upper()
@@ -355,9 +366,35 @@ def listar_examenes_por_curso(id_curso: int) -> List[Dict]:
     conn = get_connection()
     conn.row_factory = sqlite3.Row
     try:
+        # 1) Ver columnas reales de la tabla examen
+        cols = conn.execute("PRAGMA table_info(examen);").fetchall()
+        if not cols:
+            raise sqlite3.OperationalError("La tabla 'examen' no existe o no tiene columnas.")
+
+        colnames = {c["name"] for c in cols}
+
+        # 2) Elegir la PK correcta (según tu DB puede ser 'id' o 'id_inscripcion')
+        if "id" in colnames:
+            pk = "id"
+        elif "id_inscripcion" in colnames:
+            pk = "id_inscripcion"
+        else:
+            # si no hay ninguna de esas, usamos la primera PK marcada
+            pk_candidates = [c["name"] for c in cols if c["pk"] == 1]
+            pk = pk_candidates[0] if pk_candidates else None
+
+        if not pk:
+            raise sqlite3.OperationalError("No se encontró columna PK en 'examen'.")
+
+        # 3) SELECT normalizando el id SIEMPRE como 'id'
         cur = conn.execute(
-            """
-            SELECT id, id_curso, nombre, tipo, fecha_examen
+            f"""
+            SELECT
+                {pk} AS id,
+                nombre,
+                tipo,
+                fecha_examen,
+                id_curso
             FROM examen
             WHERE id_curso = ?
             ORDER BY fecha_examen DESC, nombre;
@@ -367,7 +404,6 @@ def listar_examenes_por_curso(id_curso: int) -> List[Dict]:
         return [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
-
 
 # Para Docente: ver inscriptos (para cargar notas)
 def listar_inscriptos_por_curso(id_curso: int) -> List[Dict]:
@@ -961,7 +997,7 @@ def eliminar_telefono(id_usuario: int, numero: str) -> Tuple[bool, Optional[str]
     numero = (numero or "").strip()
     if not numero:
         return False, "Número inválido."
-
+    
     conn = get_connection()
     try:
         with conn:
@@ -976,6 +1012,58 @@ def eliminar_telefono(id_usuario: int, numero: str) -> Tuple[bool, Optional[str]
         return False, str(e)
     finally:
         conn.close()
+    
+def registrar_nota(nota: Nota) -> Tuple[bool, Optional[str]]:
+    """
+    Inserta una nota en la tabla 'nota'.
+    Devuelve (True, None) si ok, o (False, "mensaje") si falla.
+
+    Requiere que exista la tabla:
+      nota(id INTEGER PK, id_examen INTEGER, id_alumno INTEGER, nota REAL, fecha_registro TEXT, observacion TEXT)
+    """
+    conn = get_connection()
+    try:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO nota (id_examen, id_alumno, nota, fecha_registro, observacion)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    int(nota.id_examen),
+                    int(nota.id_alumno),
+                    float(nota.nota),
+                    str(nota.fecha_registro),
+                    nota.observacion,
+                )
+            )
+        return True, None
+
+    except sqlite3.IntegrityError as e:
+        msg = str(e).lower()
+        if "foreign key" in msg:
+            return False, "Examen o alumno inválido (no existe)."
+        if "unique" in msg:
+            return False, "Ya existe una nota para ese alumno en ese examen."
+        return False, str(e)
+
+    except Exception as e:
+        return False, str(e)
+
+    finally:
+        conn.close()
+
+def debug_listar_examenes():
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute("SELECT * FROM examen ORDER BY id DESC;")
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+
 
 
 

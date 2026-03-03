@@ -63,3 +63,36 @@ def migrar_pago_unico():
         print(f"Error durante la migración: {e}")
     finally:
         conn.close()
+
+def migrar_nota_fk_correcta():
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA foreign_keys = OFF;")
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS nota_nueva (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_examen INTEGER NOT NULL,
+            id_alumno INTEGER NOT NULL,
+            nota REAL NOT NULL,
+            fecha_registro TEXT NOT NULL,
+            observacion TEXT,
+            UNIQUE(id_examen, id_alumno),
+            FOREIGN KEY (id_examen) REFERENCES examen(id) ON UPDATE CASCADE ON DELETE CASCADE,
+            FOREIGN KEY (id_alumno) REFERENCES usuario(id) ON UPDATE CASCADE ON DELETE CASCADE
+        );
+        """)
+
+        # ⚠️ SIN COPIAR DATOS (porque tu nota vieja no tenía id_alumno)
+        cur.execute("DROP TABLE IF EXISTS nota;")
+        cur.execute("ALTER TABLE nota_nueva RENAME TO nota;")
+
+        cur.execute("PRAGMA foreign_keys = ON;")
+        conn.commit()
+        print("Migración de tabla 'nota' completada.")
+    except sqlite3.Error as e:
+        print("Error migrando nota:", e)
+    finally:
+        conn.close()
+

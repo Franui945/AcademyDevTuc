@@ -53,7 +53,11 @@ from services import (
     listar_notas_por_alumno,
     listar_inscriptos_por_curso,
     guardar_nota_service,
-    listar_examenes_por_curso
+    listar_examenes_por_curso,
+    registrar_nota,
+    debug_listar_examenes
+
+
 
 )
 
@@ -228,13 +232,7 @@ class AppAcademia:
                 label="Mis cursos",
                 command=self._mis_cursos_docente
             )
-            menu_cursos.add_separator()
-            menu_cursos.add_command(
-                label="Nuevo Curso",
-                command=self._form_curso
-            )
-
-
+          
         elif rol == "ADMIN":
             # Admin: gestionar + crear
             menu_cursos.add_command(label="Gestionar Cursos", command=self._gestionar_cursos)
@@ -1325,6 +1323,31 @@ class AppAcademia:
             return int(valores[0])
         except Exception:
             return None
+        
+    def _editar_curso_desde_table(self):
+        if not self._es_admin():
+            messagebox.showwarning("Permiso denegado", "Solo ADMIN puede editar cursos.")
+            return
+
+        # Asegura que exista el tree
+        if not hasattr(self, "tree_cursos"):
+            messagebox.showwarning("Atención", "No hay tabla de cursos cargada.")
+            return
+
+        sel = self.tree_cursos.selection()
+        if not sel:
+            messagebox.showwarning("Atención", "Seleccioná un curso para editar.")
+            return
+
+        valores = self.tree_cursos.item(sel[0], "values")
+        try:
+            id_curso = int(valores[0])  # la primera columna es el ID
+        except Exception:
+            messagebox.showerror("Error", "No se pudo obtener el ID del curso.")
+            return
+
+        # Llama a tu form existente
+        self._form_editar_curso(id_curso)    
 
 
     def _obtener_id_inscripcion_admin(self):
@@ -2031,58 +2054,79 @@ class AppAcademia:
         if not self._es_admin():
             messagebox.showwarning("Permiso denegado", "Solo ADMIN puede eliminar cursos.")
             return
-        
-        id_curso = self._obtener_id_curso()
-        if id_curso is None:
+
+        if not hasattr(self, "tree_cursos"):
+            return
+
+        sel = self.tree_cursos.selection()
+        if not sel:
             messagebox.showwarning("Atención", "Seleccioná un curso para eliminar.")
             return
 
-        
-        seleccion = self.tree_cursos.selection()
-        if not seleccion:
-            messagebox.showwarning("Atención", "Seleccioná un curso para eliminar.")
+        valores = self.tree_cursos.item(sel[0], "values")
+        try:
+            id_curso = int(valores[0])
+        except Exception:
+            messagebox.showerror("Error", "No se pudo obtener el ID del curso.")
             return
+
+        # ✅ Estado está en la última columna de tu tabla ("Estado")
+        estado = (valores[-1] or "").strip().upper()
+        if estado != "CERRADO":
+            messagebox.showwarning(
+                "No permitido",
+                "Solo se pueden eliminar cursos en estado CERRADO.\n"
+                "Si querés, primero cerralo."
+            )
+            return
+
+        # ✅ Chequeo extra: no permitir si tiene inscripciones
+        conn = get_connection()
+        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.execute(
+                "SELECT COUNT(*) AS cant FROM inscripcion WHERE id_curso = ?",
+                (id_curso,)
+            )
+            cant = cur.fetchone()["cant"]
+        finally:
+            conn.close()
+
+        if cant > 0:
+            messagebox.showwarning(
+                "No permitido",
+                f"No se puede eliminar: el curso tiene {cant} inscripción/es vinculada/s.\n"
+                "Recomendación: mantenerlo cerrado para conservar el historial."
+            )
+            return
+
         confirmar = messagebox.askyesno(
             "Confirmar eliminación",
-            "¿Estás seguro de que deseas eliminar el curso seleccionado?\n"
-            "Si tiene inscripciones vinculadas, la base no puede permitir borrarlo."
+            "¿Eliminar el curso seleccionado?\n"
+            "Esta acción no se puede deshacer."
         )
-
         if not confirmar:
             return
-        
-        
+
         conn = get_connection()
         try:
-            cur = conn.cursor()
-            cur.execute("DELETE FROM curso WHERE id = ?", (id_curso,))
-            conn.commit()
-            if cur.rowcount == 0:
-                messagebox.showinfo("Info", "No se eliminó ningún curso (quizás ya no existe).")
-            else:
-                messagebox.showinfo("Éxito", f"Curso ID {id_curso} eliminado correctamente.")
-            self._cargar_cursos_en_tree()
+            with conn:
+                cur = conn.execute("DELETE FROM curso WHERE id = ?", (id_curso,))
+                if cur.rowcount == 0:
+                    messagebox.showinfo("Info", "No se eliminó ningún curso (quizás ya no existe).")
+                else:
+                    messagebox.showinfo("Éxito", f"Curso ID {id_curso} eliminado correctamente.")
         except sqlite3.IntegrityError:
             messagebox.showerror(
                 "Error",
-                "No se pudo eliminar el curso porque tiene inscripciones vinculadas."
+                "No se pudo eliminar el curso porque tiene registros vinculados."
             )
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo eliminar el curso:\n{e}")
         finally:
             conn.close()
 
-    def _editar_curso_desde_table(self):
-        if not self._es_admin():
-            messagebox.showwarning("Permiso denegado", "Solo ADMIN puede editar cursos.")
-            return
-
-
-        id_curso = self._obtener_id_curso()
-        if id_curso is None:
-            messagebox.showwarning("Atención", "Seleccioná un curso para editar.")
-            return
-        self._form_editar_curso(id_curso=id_curso)
+        self._cargar_cursos_en_tree()
 
 
     
@@ -2764,8 +2808,8 @@ class AppAcademia:
 
     def _form_curso(self):
         # Permitir ADMIN y DOCENTE (tu menú deja DOCENTE crear curso)
-        if not self.usuario_actual or self.usuario_actual.get("rol") not in ("ADMIN", "DOCENTE"):
-            messagebox.showwarning("Permiso denegado", "Solo ADMIN o DOCENTE puede crear cursos.")
+        if not self._es_admin():
+            messagebox.showwarning("Permiso denegado", "Solo ADMIN puede crear cursos.")
             self._mostrar_home()
             return
 
@@ -2779,12 +2823,6 @@ class AppAcademia:
 
         docentes, admins = self._get_docentes_y_admins()
 
-        rol_actual = self.usuario_actual.get("rol")
-
-        # Si es DOCENTE, fijamos su ID como docente único
-        if rol_actual == "DOCENTE":
-            id_docente_actual = self.usuario_actual.get("id")
-            docentes = [(id_docente_actual, f"{self.usuario_actual.get('nombre','')} {self.usuario_actual.get('apellido','')}")]
 
         if not docentes:
             messagebox.showwarning("Atención", "No hay docentes disponibles.")
@@ -3396,6 +3434,13 @@ class AppAcademia:
         cb_examen = ttk.Combobox(top, state="readonly", values=[], width=40)
         cb_examen.grid(row=1, column=1, sticky="w", padx=5, pady=4)
 
+        self.cb_curso = cb_curso
+        self.cb_examen = cb_examen
+
+        self.map_examen = {}
+
+    
+
         # tabla alumnos
         frame_tabla = ttk.Frame(self.contenedor, style="Card.TFrame", padding=10)
         frame_tabla.pack(fill="both", expand=True, pady=(10, 0))
@@ -3415,30 +3460,44 @@ class AppAcademia:
         tree.configure(yscrollcommand=sy.set)
         sy.pack(side="right", fill="y")
 
-        # mapeo examen visible -> id
-        map_examen = {}
+
+        self.tree_notas = tree  
+
+        self.tree_notas.bind("<Double-1>", self._editar_celda_nota)
+        
+        
 
         def recargar_examenes_y_alumnos():
-            nonlocal map_examen
-            map_examen = {}
-
             id_curso = int(map_curso[cb_curso.get()])
 
-            # cargar exámenes
+            # 1) cargar exámenes
             exs = listar_examenes_por_curso(id_curso)
+
             visibles = []
+            self.map_examen = {}
+
             for e in exs:
-                txt = f'{e["fecha_examen"]} - {e["tipo"]} - {e["nombre"]}'
+                # si viene como dict
+                if isinstance(e, dict):
+                    ex_id = e.get("id")
+                    fecha = e.get("fecha_examen", "")
+                    tipo = e.get("tipo", "")
+                    nombre = e.get("nombre", "")
+                else:
+                    # si viene como tupla: (id, id_curso, nombre, tipo, fecha_examen)
+                    ex_id = e[0]
+                    nombre = e[2]
+                    tipo = e[3]
+                    fecha = e[4]
+
+                txt = f"{fecha} - {tipo} - {nombre}"
                 visibles.append(txt)
-                map_examen[txt] = e["id"]
+                self.map_examen[txt] = int(ex_id)
 
             cb_examen["values"] = visibles
-            if visibles:
-                cb_examen.set(visibles[0])
-            else:
-                cb_examen.set("")
+            cb_examen.set(visibles[0] if visibles else "")
 
-            # cargar alumnos inscriptos
+            # 2) cargar alumnos inscriptos
             for it in tree.get_children():
                 tree.delete(it)
 
@@ -3447,7 +3506,7 @@ class AppAcademia:
                 tree.insert("", "end", values=(a["id_alumno"], a["alumno"], a["estado_insc"], "", ""))
 
         cb_curso.bind("<<ComboboxSelected>>", lambda e: recargar_examenes_y_alumnos())
-        recargar_examenes_y_alumnos()
+        recargar_examenes_y_alumnos()  
 
         def guardar_nota_seleccion():
             sel = tree.selection()
@@ -3487,7 +3546,11 @@ class AppAcademia:
                     messagebox.showwarning("Atención", "Nota inválida.")
                     return
 
-                id_examen = int(map_examen[cb_examen.get()])
+                id_examen = self.map_examen.get(cb_examen.get())
+                if not id_examen:
+                    messagebox.showwarning("Atención", "Examen inválido.")
+                    return
+                id_examen = int(id_examen)
                 n = Nota(
                     id=None,
                     id_examen=id_examen,
@@ -3515,6 +3578,96 @@ class AppAcademia:
         botones.pack(fill="x", pady=(10, 0))
         ttk.Button(botones, text="Guardar nota", style="Accent.TButton", command=guardar_nota_seleccion).pack(side="left", padx=5)
         ttk.Button(botones, text="Recargar", style="Secondary.TButton", command=recargar_examenes_y_alumnos).pack(side="left", padx=5)
+
+    def _editar_celda_nota(self, event):
+        tree = self.tree_notas
+        item = tree.identify_row(event.y)
+        col = tree.identify_column(event.x)  # '#1', '#2', etc.
+
+        if not item:
+            return
+
+        # Ajustá este número según el orden real de tus columnas:
+        # Ejemplo columnas: ("ID Alumno","Alumno","Estado","Nota","Obs")
+        # entonces Nota = #4
+        if col != "#4":
+            return
+
+        x, y, w, h = tree.bbox(item, col)
+        valor_actual = tree.set(item, col)
+
+        entry = ttk.Entry(tree)
+        entry.place(x=x, y=y, width=w, height=h)
+        entry.insert(0, valor_actual)
+        entry.focus()
+
+        def guardar_evento(e=None):
+            nuevo_valor = entry.get().strip()
+            entry.destroy()
+            self._guardar_nota_desde_tree(item, nuevo_valor)
+
+        entry.bind("<Return>", guardar_evento)
+        entry.bind("<Escape>", lambda e: entry.destroy())
+        entry.bind("<FocusOut>", guardar_evento)
+
+
+    def _guardar_nota_desde_tree(self, item_id, nota_str: str):
+        tree = self.tree_notas
+        values = tree.item(item_id, "values")
+
+        # columnas: ("ID Alumno","Alumno","Estado","Nota","Obs")
+        try:
+            id_alumno = int(values[0])
+        except Exception:
+            messagebox.showerror("Error", "No se pudo leer el ID del alumno.")
+            return
+
+        # 1) validar nota
+        try:
+            nota_val = float((nota_str or "").replace(",", "."))
+            if not (0 <= nota_val <= 10):
+                raise ValueError
+        except Exception:
+            messagebox.showwarning("Atención", "La nota debe ser un número entre 0 y 10.")
+            return
+
+        # 2) examen seleccionado
+        examen_txt = (self.cb_examen.get() or "").strip()
+        if not examen_txt:
+            messagebox.showwarning("Atención", "Seleccioná un examen.")
+            return
+
+        id_examen = self.map_examen.get(examen_txt)
+        if not id_examen:
+            messagebox.showwarning("Atención", "Examen inválido.")
+            return
+
+        # 3) guardar en DB (service)
+        try:
+            from datetime import date
+            from models import Nota
+            from services import guardar_nota_service
+
+            n = Nota(
+                id_examen=int(id_examen),
+                id_alumno=int(id_alumno),
+                nota=float(nota_val),
+                fecha_registro=str(date.today()),
+                observacion=None
+            )
+
+            ok, err = guardar_nota_service(n)
+            if not ok:
+                messagebox.showerror("Error", err or "No se pudo guardar la nota.")
+                return
+
+            # 4) reflejar en el tree
+            tree.set(item_id, "Nota", f"{nota_val:.2f}".rstrip("0").rstrip("."))
+            tree.set(item_id, "Estado", "CARGADA")
+            messagebox.showinfo("Éxito", "Nota guardada.")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo guardar la nota:\n{e}")
 
 
 

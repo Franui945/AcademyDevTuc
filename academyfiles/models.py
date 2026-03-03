@@ -126,7 +126,8 @@ class Examen:
     fecha_examen: str = ""  # 'YYYY-MM-DD'
 
     def to_dict(self) -> Dict[str, Any]:
-        return _clean(asdict(self))
+        d = asdict(self)
+        return _clean({k: v for k, v in d.items() if v is not None})
 
 
 @dataclass
